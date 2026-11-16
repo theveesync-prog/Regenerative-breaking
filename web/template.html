@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EV Regenerative Braking Simulator</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;color:#111827;background:#f8fafc;display:flex;min-height:100vh}
+#side{width:320px;padding:14px;background:#fff;border-right:1px solid #e5e7eb;overflow:auto;height:100vh;position:sticky;top:0}
+#main{flex:1;padding:16px 20px;min-width:0}h1{font-size:20px;margin:0 0 4px}h3{font-size:13px;margin:14px 0 6px;color:#475569;text-transform:uppercase;letter-spacing:.04em}
+label{display:block;margin:8px 0 2px;font-size:12px;color:#334155;cursor:help;border-bottom:1px dotted #94a3b8;width:fit-content}
+input[type=number],select{width:100%;padding:5px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px}input[type=range]{width:100%}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:10px 0}.k{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:8px 10px;cursor:help}
+.k b{display:block;font-size:20px}.k span{font-size:11px;color:#64748b}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.grid>div{background:#fff;border:1px solid #e5e7eb;border-radius:8px}
+table{border-collapse:collapse;width:100%;background:#fff;font-size:12px}td,th{border:1px solid #e5e7eb;padding:4px 6px;text-align:right}th:first-child,td:first-child{text-align:left}tr.best td{background:#dcfce7}
+.warn{background:#fef3c7;border:1px solid #f59e0b;padding:6px 10px;border-radius:6px;margin:6px 0}.note{color:#64748b;font-size:12px}.formulas code{display:block;background:#f1f5f9;padding:4px 8px;margin:3px 0;border-radius:4px}
+@media(max-width:900px){body{flex-direction:column}#side{width:100%;height:auto;position:static}.kpis{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}}
+</style></head><body>
+<div id="side"><h1>Inputs</h1>
+<div id="carnote" class="note"></div>
+<label title="Loads vehicle, battery and motor ratings (illustrative data)">Car preset</label><select id="car"></select>
+<h3>Vehicle</h3><div id="veh"></div><h3>Motor</h3><div id="mot"></div><h3>Drivetrain</h3><div id="drv"></div><h3>Battery</h3><div id="bat"></div></div>
+<div id="main"><h1>EV Regenerative Braking Simulator</h1><div class="note" id="sub"></div><div id="warn"></div>
+<div class="kpis" id="kpis"></div><div class="grid" id="plots"></div>
+<h3>Energy analysis</h3><table id="energy"></table>
+<h3>Compare 5 motors (identical vehicle &amp; battery)</h3><table id="cmp"></table><div class="grid" style="margin-top:10px"><div id="cbar"></div><div id="cpow"></div></div>
+<h3>Formulas (hover the inputs and results too)</h3><div class="formulas" id="formulas"></div>
+<p class="note">Illustrative model; car data is approximate and may be unconfirmed (Safari EV is not launched). Same equations as the Python/MATLAB versions in the repo.</p></div>
+<script>
+const CARS=__CARS__, MOTORS=__MOTORS__;
+const TIP={mass:"F_req = m*a - F_res",v0:"v0 = v_kmh / 3.6",decel:"t_stop = v0/a;  s = v0^2/(2a)",dist:"a = v0^2 / (2 d)",r:"omega_wheel = v / r",crr:"F_roll = Crr*m*g*cos(theta)",cd:"F_drag = 0.5*rho*Cd*A*v^2 (rho=1.225)",area:"Frontal area A in F_drag",grade:"F_grade = m*g*sin(theta)",mu:"Max possible decel = mu*g",
+tmax:"T_avail = min(Tmax, Pmax/omega)*min(1, rpm/rpm_fade)",pmax:"Motor power limit (constant-power region)",eff:"eta = eta0 - c_load(T/Tmax-0.7)^2 - c_speed(rpm/rpm_max-0.45)^2",gear:"Auto: G = (omega_motor_max * r) / v_top",top:"Used for auto gear ratio",dt:"P_motor = F_regen * v * eta_dt",share:"Only driven axle(s) can regenerate",
+bat:"Battery capacity (kWh)",soc0:"Initial SOC",socmax:"Regen cut to zero at SOC_max",chg:"P_bat = min(P_mech*eta_m, P_chg_max(SOC))",ceff:"SOC += P_bat*eta_c*dt/(C*3.6e6)*100"};
+const G=9.81,RHO=1.225,$=id=>document.getElementById(id);
+const V={}; // input elements
+function field(parent,key,label,val,min,max,step,type){const l=document.createElement('label');l.textContent=label;l.title=TIP[key]||'';parent.appendChild(l);
+ const i=document.createElement('input');i.type=type||'number';i.min=min;i.max=max;i.step=step;i.value=val;i.title=TIP[key]||'';parent.appendChild(i);V[key]=i;
+ if(type==='range'){const o=document.createElement('div');o.className='note';o.id='o_'+key;parent.appendChild(o);i.addEventListener('input',()=>{o.textContent=i.value;run()});o.textContent=val}else i.addEventListener('input',run);return i}
+function sel(parent,key,label,opts,tip){const l=document.createElement('label');l.textContent=label;l.title=tip||TIP[key]||'';parent.appendChild(l);const s=document.createElement('select');opts.forEach(o=>{const e=document.createElement('option');e.textContent=o;s.appendChild(e)});s.addEventListener('change',run);parent.appendChild(s);V[key]=s;return s}
+$('car').innerHTML='<option>Custom vehicle</option>'+CARS.map(c=>`<option>${c.name}</option>`).join('');
+field($('veh'),'mass','Vehicle mass (kg)',1500,300,4000,10);field($('veh'),'v0','Initial speed (km/h)',60,5,250,1);
+sel($('veh'),'mode','Braking input',['Deceleration','Stopping distance']);
+field($('veh'),'decel','Deceleration (m/s²)',3,0.5,9,0.1,'range');field($('veh'),'dist','Stopping distance (m)',40,5,200,1,'range');
+field($('veh'),'r','Wheel radius (m)',0.32,0.15,0.6,0.005);field($('veh'),'crr','Rolling resistance coeff.',0.010,0.002,0.05,0.001);
+field($('veh'),'cd','Drag coeff. Cd',0.30,0.15,0.8,0.01);field($('veh'),'area','Frontal area (m²)',2.2,1,5,0.05);
+field($('veh'),'grade','Road grade (°, + uphill)',0,-10,10,0.5,'range');field($('veh'),'mu','Tyre friction μ',0.8,0.2,1.1,0.05,'range');
+sel($('mot'),'mtype','Motor technology',Object.keys(MOTORS),'Illustrative specs from the project brief');
+field($('mot'),'tmax','Max torque (Nm)',180,20,1500,5);field($('mot'),'pmax','Max power (kW)',60,5,600,1);field($('mot'),'eff','Rated efficiency (%)',94,50,99,0.5);
+const ce=sel($('mot'),'consteff','Efficiency model',['Efficiency map','Constant efficiency']);
+field($('drv'),'top','Top speed (km/h)',160,60,350,5);sel($('drv'),'gmode','Gear ratio',['Auto','Manual'],TIP.gear);field($('drv'),'gear','Manual gear ratio',9,1,30,0.05);
+field($('drv'),'dt','Drivetrain efficiency (%)',95,70,100,0.5);field($('drv'),'share','Max regen share of braking (%)',100,10,100,5,'range');
+field($('bat'),'bat','Battery capacity (kWh)',40,2,200,1);field($('bat'),'soc0','Initial SOC (%)',50,0,100,1,'range');field($('bat'),'socmax','Maximum SOC (%)',95,50,100,1,'range');
+field($('bat'),'chg','Max charging power (kW)',60,1,400,1);field($('bat'),'ceff','Charge efficiency (%)',98,85,100,0.5);
+let carMotor=null;
+V.mtype.addEventListener('change',()=>{carMotor=null;const m=MOTORS[V.mtype.value];V.tmax.value=m.max_torque_nm;V.pmax.value=m.max_power_kw;V.eff.value=m.efficiency*100});
+$('car').addEventListener('change',()=>{const c=CARS.find(c=>c.name===$('car').value);
+ if(c){V.mass.value=c.mass_kg;V.r.value=c.wheel_radius_m;V.cd.value=c.drag_coefficient;V.area.value=c.frontal_area_m2;V.bat.value=c.battery_kwh;V.chg.value=c.max_charge_kw;V.top.value=c.top_speed_kmh;
+  V.mtype.value=c.motor_type;V.tmax.value=c.motor_max_torque_nm;V.pmax.value=c.motor_max_power_kw;V.eff.value=MOTORS[c.motor_type].efficiency*100;V.share.value={AWD:100,FWD:70,RWD:60}[c.drive_layout];$('o_share').textContent=V.share.value;
+  $('carnote').innerHTML=`Confidence: <b>${c.confidence}</b> — ${c.note} <a href="${c.source}" target="_blank">source</a>`}else $('carnote').textContent='';run()});
+const autoGear=(rpm,r,v)=>rpm*2*Math.PI/60*r/(v/3.6);
+const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
+function effMap(rpm,T,M,constant){const e0=M.efficiency;if(constant)return e0;const l=T/M.max_torque_nm,s=rpm/M.max_rpm;return clamp(e0-M.c_load*(l-.7)**2-M.c_speed*(s-.45)**2,.5,e0)}
+function simulate(p,M){const v0=p.v0/3.6,a=p.mode==='d'?v0*v0/(2*p.dist):p.decel,th=p.grade*Math.PI/180,tS=v0/a,N=800,dt=tS/N;
+ const fRoll=p.crr*p.mass*G*Math.cos(th),fGr=p.mass*G*Math.sin(th),cap=p.bat*3.6e6,Tm=M.max_torque_nm,Pm=M.max_power_kw*1000;
+ const o={t:[],kmh:[],s:[],f_req:[],f_reg:[],f_fric:[],f_res:[],T:[],rpm:[],pm:[],pe:[],pf:[],soc:[]};let soc=p.soc0;
+ const E={res:0,brake:0,wheel:0,fric:0,mech:0,elec:0};let prev=null;
+ for(let i=0;i<=N;i++){const t=i*dt,v=Math.max(v0-a*t,0),fRes=fRoll+.5*RHO*p.cd*p.area*v*v+fGr,fReq=Math.max(p.mass*a-fRes,0),rpm=v/p.r*p.gear*60/(2*Math.PI),om=rpm*2*Math.PI/60;
+  const tAv=rpm>0?Math.min(Tm,Pm/om)*clamp(rpm/M.regen_fade_rpm,0,1):0,fTrq=tAv*p.gear/(p.dt*p.r),fAx=fReq*p.share;
+  const pLim=soc>=p.socmax?0:p.chg*1000*Math.min(1,(p.socmax-soc)/10);let eta=M.efficiency,fR=0,T=0;
+  for(let k=0;k<3;k++){const fB=v>1e-6?pLim/(eta*p.dt*v):0;fR=Math.min(fAx,fTrq,fB);T=fR*p.r*p.dt/p.gear;eta=effMap(rpm,T,M,p.constEff)}
+  const pm=T*om,pe=pm*eta,pf=(fReq-fR)*v;
+  Object.entries({t,kmh:v*3.6,s:v0*t-.5*a*t*t,f_req:fReq,f_reg:fR,f_fric:fReq-fR,f_res:fRes,T,rpm,pm:pm/1000,pe:pe/1000,pf:pf/1000,soc}).forEach(([k,x])=>o[k].push(x));
+  const cur={fRes:fRes*v,fReq:fReq*v,wheel:fR*v,fric:pf,mech:pm,elec:pe};
+  if(prev)for(const k in E)E[k]+=.5*(prev[{res:'fRes',brake:'fReq'}[k]||k]+cur[{res:'fRes',brake:'fReq'}[k]||k])*dt;prev=cur;
+  soc=Math.min(soc+pe*p.ceff*dt/cap*100,p.socmax)}
+ const ke=.5*p.mass*v0*v0,w=j=>j/3.6e6;
+ return{o,a,tS,sS:v0*v0/(2*a),ke:w(ke),E:{res:w(E.res),brake:w(E.brake),wheel:w(E.wheel),fric:w(E.fric),mech:w(E.mech),elec:w(E.elec)},rec:100*E.elec/ke,soc:o.soc[N],
+  pk:Math.max(...o.pm),pkT:Math.max(...o.T),pkRpm:Math.max(...o.rpm),grip:a>p.mu*G,socCap:o.soc[N]>=p.socmax-1e-9&&E.elec>=0&&p.soc0<p.socmax&&Math.max(...o.soc)>=p.socmax-1e-6,resid:100*Math.abs(ke-(E.res+E.brake))/ke}}
+function params(){const g=k=>+V[k].value;const M=Object.assign({},MOTORS[V.mtype.value],{max_torque_nm:g('tmax'),max_power_kw:g('pmax'),efficiency:g('eff')/100});
+ const gear=V.gmode.value==='Auto'?autoGear(M.max_rpm,g('r'),g('top')):g('gear');
+ return{M,p:{mass:g('mass'),v0:g('v0'),mode:V.mode.value==='Stopping distance'?'d':'a',decel:g('decel'),dist:g('dist'),r:g('r'),crr:g('crr'),cd:g('cd'),area:g('area'),grade:g('grade'),mu:g('mu'),gear,dt:g('dt')/100,share:g('share')/100,bat:g('bat'),soc0:g('soc0'),socmax:g('socmax'),chg:g('chg'),ceff:g('ceff')/100,constEff:V.consteff.value.startsWith('Constant')}}}
+const L={margin:{l:45,r:10,t:30,b:35},xaxis:{title:'Time (s)'},hovermode:'x unified',height:260,legend:{orientation:'h',y:1.25},paper_bgcolor:'#fff'};
+const C=['#2563eb','#16a34a','#dc2626','#d97706','#9333ea','#111827'];
+function plot(id,title,traces,yt){let d=$(id);if(!d){d=document.createElement('div');d.id=id;$('plots').appendChild(d)}
+ Plotly.react(d,traces.map((t,i)=>({x:t.x,y:t.y,name:t.n,mode:'lines',line:{color:t.c||C[i],dash:t.d||'solid',width:2}})),Object.assign({},L,{title:{text:title,font:{size:13}},yaxis:{title:yt}}),{displayModeBar:false,responsive:true})}
+function run(){const{p,M}=(()=>{const q=params();return{p:q.p,M:q.M}})();V.gear.value=V.gmode.value==='Auto'?p.gear.toFixed(2):V.gear.value;
+ const R=simulate(p,M),o=R.o;
+ $('sub').textContent=`${$('car').value} · ${V.mtype.value} · ${p.v0} km/h → 0 · gear ratio ${p.gear.toFixed(2)}${V.gmode.value==='Auto'?' (auto)':''}`;
+ $('warn').innerHTML=(R.grip?`<div class="warn">Deceleration ${R.a.toFixed(2)} m/s² exceeds grip limit μ·g = ${(p.mu*G).toFixed(2)} m/s².</div>`:'')+(R.socCap?'<div class="warn">Battery hit max SOC: regen was cut, friction brakes took over.</div>':'');
+ const K=[['Recovered electrical energy',(R.E.elec*1000).toFixed(1)+' Wh','E_elec = ∫ P_bat dt'],['Energy recovery',R.rec.toFixed(1)+' %','E_elec / KE × 100'],['Final battery SOC',R.soc.toFixed(3)+' %','SOC += P_bat·η·dt / C'],['Peak motor power',R.pk.toFixed(1)+' kW','P = T·ω = F_regen·v·η_dt'],
+  ['Stopping time',R.tS.toFixed(2)+' s','t = v0 / a'],['Stopping distance',R.sS.toFixed(1)+' m','s = v0² / 2a'],['Peak motor torque',R.pkT.toFixed(0)+' Nm','T = F_regen·r·η_dt / G'],['Peak motor RPM',Math.round(R.pkRpm).toLocaleString(),'N = 60·G·v / (2π r)']];
+ $('kpis').innerHTML=K.map(k=>`<div class="k" title="${k[2]}"><span>${k[0]}</span><b>${k[1]}</b></div>`).join('');
+ plot('p1','Vehicle speed vs time',[{x:o.t,y:o.kmh,n:'Speed (km/h)'}],'km/h');plot('p2','Motor torque vs time',[{x:o.t,y:o.T,n:'Regen torque (Nm)',c:C[1]}],'Nm');
+ plot('p3','Motor speed vs time',[{x:o.t,y:o.rpm,n:'Motor speed (rpm)',c:C[3]}],'rpm');plot('p4','Motor mechanical & battery charging power',[{x:o.t,y:o.pm,n:'Motor mech. (kW)'},{x:o.t,y:o.pe,n:'Battery chg (kW)',c:C[1]},{x:o.t,y:o.pf,n:'Friction (kW)',c:C[2],d:'dash'}],'kW');
+ plot('p5','Braking force: required / regen / friction',[{x:o.t,y:o.f_req,n:'Required (N)',c:C[5]},{x:o.t,y:o.f_reg,n:'Regen (N)',c:C[1]},{x:o.t,y:o.f_fric,n:'Friction (N)',c:C[2],d:'dash'},{x:o.t,y:o.f_res,n:'Road resistance (N)',c:'#9ca3af',d:'dot'}],'N');
+ plot('p6','Battery SOC vs time',[{x:o.t,y:o.soc,n:'SOC (%)',c:C[4]}],'%');
+ const e=R.E,f=x=>x.toFixed(5);const mloss=e.mech-e.elec,dloss=e.wheel-e.mech;
+ $('energy').innerHTML='<tr><th>Item</th><th>kWh</th></tr>'+[['Initial kinetic energy',R.ke],['Road resistance',e.res],['Total braking energy (brakes)',e.brake],['Mechanical regenerative energy (motor shaft)',e.mech],['Friction braking energy',e.fric],['Drivetrain loss',dloss],['Motor loss',mloss],['Recovered electrical energy',e.elec]].map(r=>`<tr><td>${r[0]}</td><td>${f(r[1])}</td></tr>`).join('')+`<tr><td>Energy-balance residual</td><td>${R.resid.toFixed(4)} %</td></tr>`;
+ const rows=Object.entries(MOTORS).map(([k,m])=>{const pk=Object.assign({},p);if(V.gmode.value==='Auto')pk.gear=autoGear(m.max_rpm,p.r,+V.top.value);const s=simulate(pk,m);return{k,g:pk.gear,s}});
+ const best=Math.max(...rows.map(r=>r.s.rec));
+ $('cmp').innerHTML='<tr><th>Motor</th><th>Gear</th><th>Recovered (Wh)</th><th>Recovery %</th><th>Final SOC %</th><th>Peak kW</th><th>Peak Nm</th><th>Peak RPM</th></tr>'+rows.map(r=>`<tr class="${r.s.rec===best?'best':''}"><td>${r.k}</td><td>${r.g.toFixed(2)}</td><td>${(r.s.E.elec*1000).toFixed(1)}</td><td>${r.s.rec.toFixed(1)}</td><td>${r.s.soc.toFixed(3)}</td><td>${r.s.pk.toFixed(1)}</td><td>${r.s.pkT.toFixed(0)}</td><td>${Math.round(r.s.pkRpm)}</td></tr>`).join('');
+ const col={PMSM:'#2563eb',BLDC:'#16a34a',ACIM:'#d97706',SRM:'#9333ea','DC Series':'#dc2626'};
+ Plotly.react('cbar',[{type:'bar',x:rows.map(r=>r.k),y:rows.map(r=>r.s.rec),marker:{color:rows.map(r=>col[r.k])}}],Object.assign({},L,{title:{text:'Energy recovery %',font:{size:13}},xaxis:{},yaxis:{title:'%'}}),{displayModeBar:false});
+ Plotly.react('cpow',rows.map(r=>({x:r.s.o.t,y:r.s.o.pe,name:r.k,mode:'lines',line:{color:col[r.k]}})),Object.assign({},L,{title:{text:'Battery charging power (kW)',font:{size:13}},yaxis:{title:'kW'}}),{displayModeBar:false});
+ $('formulas').innerHTML=['v0 = v_kmh / 3.6','a = v0² / (2d);  t_stop = v0 / a;  s = v0² / (2a)','ω_wheel = v / r;  ω_motor = G·ω_wheel;  RPM = 60·ω_motor / 2π','G_auto = (ω_motor_max · r) / v_top','F_roll = Crr·m·g·cosθ;  F_drag = ½·ρ·Cd·A·v²;  F_res = F_roll + F_drag + m·g·sinθ','F_req = m·a − F_res','F_regen = min(share·F_req, T_avail·G/(η_dt·r), P_chg/(η_m·η_dt·v));  F_fric = F_req − F_regen','T_avail = min(Tmax, Pmax/ω)·min(1, rpm/rpm_fade)','T_motor = F_regen·r·η_dt / G;  P_mech = T·ω','P_bat = min(P_mech·η_m, P_chg_max(SOC)) — tapers to 0 at SOC_max','KE = ½mv0² = road + friction + recovered + drivetrain loss + motor loss;  recovery % = E_elec / KE'].map(x=>`<code>${x}</code>`).join('')}
+run();
+</script></body></html>
