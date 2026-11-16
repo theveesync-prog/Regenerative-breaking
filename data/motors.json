@@ -1,0 +1,10 @@
+{
+  "_note": "Illustrative specs from the project brief. max_rpm, regen_fade_rpm and the efficiency-map coefficients (c_load, c_speed) are modelling assumptions, not datasheet values.",
+  "motors": {
+    "PMSM":      {"name": "Permanent Magnet Synchronous Motor", "max_torque_nm": 180, "max_power_kw": 60, "efficiency": 0.94, "max_rpm": 12000, "regen_fade_rpm": 200, "c_load": 0.10, "c_speed": 0.06, "note": "High efficiency and power density; excellent regen at all speeds."},
+    "BLDC":      {"name": "Brushless DC Motor",                 "max_torque_nm": 140, "max_power_kw": 40, "efficiency": 0.90, "max_rpm": 8000,  "regen_fade_rpm": 250, "c_load": 0.14, "c_speed": 0.08, "note": "Simple trapezoidal control; good regen, lower power ceiling."},
+    "ACIM":      {"name": "AC Induction Motor",                 "max_torque_nm": 200, "max_power_kw": 65, "efficiency": 0.91, "max_rpm": 14000, "regen_fade_rpm": 350, "c_load": 0.16, "c_speed": 0.10, "note": "Needs slip control to regenerate; wide speed range, no magnets."},
+    "SRM":       {"name": "Switched Reluctance Motor",          "max_torque_nm": 160, "max_power_kw": 50, "efficiency": 0.88, "max_rpm": 12000, "regen_fade_rpm": 400, "c_load": 0.20, "c_speed": 0.12, "note": "Rugged and magnet-free; torque ripple and weaker low-speed regen."},
+    "DC Series": {"name": "DC Series Motor",                    "max_torque_nm": 220, "max_power_kw": 45, "efficiency": 0.85, "max_rpm": 6000,  "regen_fade_rpm": 700, "c_load": 0.25, "c_speed": 0.15, "note": "Needs field/circuit reconfiguration to regenerate; brushes limit speed and efficiency."}
+  }
+}
